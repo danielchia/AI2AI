@@ -51,7 +51,7 @@ AI2AI_Mandate/
 └── .gitignore
 ```
 
-## What to Tell Franklin
+## Getting Started
 
 **GitHub repo:** https://github.com/YOUR_USERNAME/AI2AI_Mandate
 
@@ -121,16 +121,16 @@ Add these to your repo settings (improves discoverability):
 - `claude-api`
 - `gstack`
 
-## Next: Issues & Discussions
+## Next Steps
 
-Create initial issues for Franklin's feedback:
+Create issues for feedback and feature requests:
 
-**Issue 1:** "Feedback from LinkLogis pilot"
-- LinkLogis team: What did you think of the forcing questions?
-- Did the decisions match your manual evaluation?
+**Issue 1:** "User Feedback"
+- What did you think of the forcing questions?
+- Did the decisions match your evaluation?
 - What questions should we add?
 
-**Issue 2:** "Feature requests"
+**Issue 2:** "Feature Requests"
 - [ ] Add batch evaluation endpoint
 - [ ] Add mandate comparison API
 - [ ] Add decision export (PDF report)
@@ -159,4 +159,4 @@ furnished to do so, subject to the following conditions:
 
 ---
 
-**That's it!** You're ready to share with Franklin and the broader community.
+**That's it!** You're ready to share with your community.
