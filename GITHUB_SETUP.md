@@ -1,11 +1,11 @@
-# GitHub Setup for FMM Pilot
+# GitHub Setup for AI2AI_Mandate Pilot
 
 Quick guide to push the Karpathy-grade refactored version to GitHub.
 
 ## Step 1: Initialize Git Repo
 
 ```bash
-cd fmm-pilot-repo
+cd ai2ai-mandate
 git init
 git add .
 git commit -m "Initial commit: minimal, teachable MVP
@@ -23,25 +23,25 @@ git commit -m "Initial commit: minimal, teachable MVP
 ## Step 2: Create GitHub Repo
 
 1. Go to https://github.com/new
-2. Create repo: `finance-mandate-matching-lab`
+2. Create repo: `AI2AI_Mandate`
 3. **Do NOT** initialize with README (we have our own)
 4. Copy the HTTPS URL
 
 ## Step 3: Push to GitHub
 
 ```bash
-git remote add origin https://github.com/YOUR_USERNAME/finance-mandate-matching-lab.git
+git remote add origin https://github.com/YOUR_USERNAME/AI2AI_Mandate.git
 git branch -M main
 git push -u origin main
 ```
 
 ## Step 4: Verify
 
-Visit https://github.com/YOUR_USERNAME/finance-mandate-matching-lab
+Visit https://github.com/YOUR_USERNAME/AI2AI_Mandate
 
 You should see:
 ```
-finance-mandate-matching-lab/
+AI2AI_Mandate/
 ├── README.md
 ├── BUILD_FROM_SCRATCH.md
 ├── mandate.py
@@ -53,7 +53,7 @@ finance-mandate-matching-lab/
 
 ## What to Tell Franklin
 
-**GitHub repo:** https://github.com/YOUR_USERNAME/finance-mandate-matching-lab
+**GitHub repo:** https://github.com/YOUR_USERNAME/AI2AI_Mandate
 
 **Key files to read:**
 1. `README.md` - 5-minute overview
@@ -72,7 +72,7 @@ python -m uvicorn app:app --reload
 ## Repository Structure
 
 ```
-finance-mandate-matching-lab/
+AI2AI_Mandate/
 ├── README.md                    # Quick start
 ├── BUILD_FROM_SCRATCH.md       # Deep dive explanation
 ├── mandate.py                  # Schemas

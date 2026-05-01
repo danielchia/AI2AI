@@ -1,4 +1,4 @@
-# Finance Mandate Matching Lab
+# AI2AI_Mandate
 
 **Minimal, teachable system for evaluating deals against investor mandates using AI agents + forcing questions (Gstack methodology).**
 

@@ -1,4 +1,4 @@
-# Build Finance Mandate Matching Lab From Scratch
+# Build AI2AI_Mandate From Scratch
 
 This guide walks through the entire system step-by-step, explaining **why** each piece exists.
 
