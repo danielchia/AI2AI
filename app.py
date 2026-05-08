@@ -26,6 +26,13 @@ from mandate import (
     validate_evaluation_request,
 )
 from agents import ProcessAgent, LegalAgent, ComplianceAgent
+from trade_receivables_mandate import TradeReceivablesMandate, Deal
+from trade_receivables_agents import (
+    ProcessAgent as TRProcessAgent,
+    LegalAgent as TRLegalAgent,
+    CreditRiskAgent,
+    get_all_questions,
+)
 
 
 # Setup logging
@@ -39,10 +46,71 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Initialize agents
+# Initialize agents (investment mandate)
 process_agent = ProcessAgent()
 legal_agent = LegalAgent()
 compliance_agent = ComplianceAgent()
+
+# Initialize agents (trade receivables)
+tr_process_agent = TRProcessAgent()
+tr_legal_agent = TRLegalAgent()
+tr_credit_agent = CreditRiskAgent()
+
+
+def make_tr_final_decision(process_result: dict, legal_result: dict, credit_result: dict) -> dict:
+    """
+    Aggregate trade receivables agent results into final decision.
+
+    Decision logic for receivables (stricter than investment deals):
+    - If any agent REJECTs → DECLINE (receivables are short-term, high default risk)
+    - If all APPROVE → FUND_IT
+    - If any CONDITIONAL → CONDITIONAL_APPROVE (with pricing adjustment)
+    """
+    process_decision = process_result.get("decision", "UNKNOWN")
+    legal_decision = legal_result.get("decision", "UNKNOWN")
+    credit_decision = credit_result.get("decision", "UNKNOWN")
+
+    # Hard blockers: any REJECT means decline
+    if process_decision == "REJECT" or legal_decision == "REJECT" or credit_decision == "REJECT":
+        return {
+            "status": "DECLINE",
+            "reason": "Hard blocker detected",
+            "blocking_agent": [
+                "process" if process_decision == "REJECT" else None,
+                "legal" if legal_decision == "REJECT" else None,
+                "credit" if credit_decision == "REJECT" else None,
+            ],
+            "next_steps": ["Review blocking agent feedback", "Request additional documentation or terms adjustment"],
+        }
+
+    # Conditional approvals (lower advance, higher discount)
+    if process_decision == "CONDITIONAL" or legal_decision == "CONDITIONAL" or credit_decision == "CONDITIONAL":
+        conditions = []
+        if process_result.get("conditions"):
+            conditions.extend(process_result["conditions"])
+        if legal_result.get("conditions"):
+            conditions.extend(legal_result["conditions"])
+        if credit_result.get("conditions"):
+            conditions.extend(credit_result["conditions"])
+
+        return {
+            "status": "CONDITIONAL_APPROVE",
+            "reason": "Conditional approval with pricing/terms adjustment",
+            "conditions": conditions,
+            "recommended_pricing_adjustments": [
+                "Reduce advance from 90% to 85%" if credit_decision == "CONDITIONAL" else None,
+                "Increase discount from 5.0% to 5.5%" if credit_decision == "CONDITIONAL" else None,
+            ],
+            "next_steps": ["Apply pricing adjustments", "Execute Master Receivables Purchase Agreement", "Fund deal"],
+        }
+
+    # All clear
+    return {
+        "status": "FUND_IT",
+        "reason": "All agents approved",
+        "recommended_pricing": {"advance_pct": 90, "discount_rate_pa": 0.05},
+        "next_steps": ["Execute Master Receivables Purchase Agreement", "Fund at standard terms"],
+    }
 
 
 def make_final_decision(process_result: dict, legal_result: dict, compliance_result: dict) -> dict:
@@ -167,6 +235,66 @@ async def evaluate_deal(request: EvaluationRequest) -> JSONResponse:
         raise HTTPException(status_code=400, detail=f"Evaluation failed: {str(e)}")
 
 
+@app.post("/evaluate_trade_receivables")
+async def evaluate_trade_receivables(mandate: dict, deal: dict) -> JSONResponse:
+    """
+    Evaluate a trade receivable deal against a receivables financing mandate.
+
+    Input: mandate (financing criteria) + deal (invoice details)
+    Process:
+      1. Process Agent: Is invoice valid? Delivery proof? Buyer confirmation?
+      2. Legal Agent: Is contract enforceable? Authority to assign? Perfection complete?
+      3. Credit Risk Agent: Is buyer creditworthy? Seller strong? Portfolio concentration OK?
+    Output: Final decision (FUND_IT / CONDITIONAL_APPROVE / DECLINE)
+
+    This endpoint uses 24 forcing questions (8 per agent) based on real trade receivables experience.
+    """
+    logger.info(f"Evaluating trade receivable {deal.get('invoice_number')} from {deal.get('company_name')}")
+
+    try:
+        # Parse inputs (for now, accept dicts; in production, use Pydantic validation)
+        # mandate_obj = TradeReceivablesMandate(**mandate)
+        # deal_obj = Deal(**deal)
+
+        logger.info("Running Process Agent (invoice quality)...")
+        process_result = tr_process_agent.evaluate(deal)
+
+        logger.info("Running Legal Agent (enforceability & compliance)...")
+        legal_result = tr_legal_agent.evaluate(deal)
+
+        logger.info("Running Credit Risk Agent (buyer & seller quality)...")
+        credit_result = tr_credit_agent.evaluate(deal)
+
+        # Aggregate results
+        logger.info("Aggregating results...")
+        final_decision = make_tr_final_decision(process_result, legal_result, credit_result)
+
+        # Build response
+        response = {
+            "invoice_number": deal.get("invoice_number"),
+            "seller": deal.get("company_name"),
+            "buyer": deal.get("buyer_name"),
+            "invoice_amount_usd": deal.get("invoice_amount_usd"),
+            "final_decision": final_decision["status"],
+            "final_reasoning": final_decision.get("reason", ""),
+            "agents": {
+                "process": process_result,
+                "legal": legal_result,
+                "credit_risk": credit_result,
+            },
+            "conditions": final_decision.get("conditions", []),
+            "pricing_recommendations": final_decision.get("recommended_pricing_adjustments") or final_decision.get("recommended_pricing"),
+            "next_steps": final_decision.get("next_steps", []),
+        }
+
+        logger.info(f"Evaluation complete: {final_decision['status']}")
+        return JSONResponse(response)
+
+    except Exception as e:
+        logger.error(f"Trade receivables evaluation failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Evaluation failed: {str(e)}")
+
+
 @app.get("/health")
 async def health_check() -> dict:
     """Health check endpoint."""
@@ -272,6 +400,86 @@ async def test_evaluation() -> JSONResponse:
     # Build request and evaluate
     request = EvaluationRequest(mandate=example_mandate, deal=example_deal)
     return await evaluate_deal(request)
+
+
+@app.post("/test_trade_receivables")
+async def test_trade_receivables() -> JSONResponse:
+    """
+    Quick test endpoint for trade receivables with anonymized example deal.
+    Based on real LinkLogis/ChemTank experience (anonymized).
+    """
+
+    # Example mandate (DTF Trade Receivables Program)
+    example_mandate = {
+        "mandate_name": "Digital Treasury Fund - Trade Receivables Program",
+        "fund_manager": "Digital Treasury Fund Pte. Ltd.",
+        "investor_jurisdiction": "Singapore",
+        "buyer_quality": {
+            "credit_rating": None,
+            "years_in_business": 5,
+            "payment_history_score": 95,
+            "regulatory_status": "compliant",
+            "jurisdiction": "Singapore",
+            "no_active_disputes": True,
+            "financial_stability": "stable",
+        },
+        "seller_quality": {
+            "years_in_business": 8,
+            "good_standing": True,
+            "not_in_insolvency": True,
+            "no_material_litigation": True,
+            "regulatory_compliance": "fully_compliant",
+        },
+        "invoice_criteria": {
+            "tenor_days_min": 90,
+            "tenor_days_max": 120,
+            "invoice_amount_min_usd": 50000,
+            "invoice_amount_max_usd": 2000000,
+            "goods_services_delivered": True,
+            "buyer_confirmation_required": True,
+            "no_prior_payment": True,
+        },
+        "financing_terms": {
+            "advance_percentage": 90.0,
+            "holdback_percentage": 10.0,
+            "discount_rate_percent_pa": 5.0,
+            "buffer_period_days": 30,
+            "recourse_type": "non_recourse",
+        },
+        "max_concentration_single_buyer_pct": 10,
+        "max_concentration_single_seller_pct": 15,
+    }
+
+    # Example deal (anonymized chemical trader / buyer scenario)
+    example_deal = {
+        "invoice_number": "INV-2025-0901",
+        "company_name": "Anon Chemical Trading Co",
+        "seller_incorporation": "Singapore",
+        "buyer_name": "Anon Materials Buyer Ltd",
+        "buyer_jurisdiction": "Singapore",
+        "buyer_credit_score": None,  # Unrated
+        "buyer_relationship_months": 18,
+        "buyer_payment_history": "100% on-time (18 months, 12+ invoices)",
+        "invoice_date": "2025-09-01",
+        "invoice_amount_usd": 500000,
+        "due_date": "2025-11-30",
+        "tenor_days": 90,
+        "goods_services_description": "Bulk sulfuric acid (5 containers, 100 tonnes)",
+        "delivery_date": "2025-09-05",
+        "delivery_proof_type": "BoL + signed delivery receipt",
+        "buyer_confirmation_obtained": True,
+        "buyer_disputes_history": "None",
+        "seller_financials_summary": {
+            "annual_revenue_usd": 75000000,
+            "ebitda_margin_pct": 8,
+            "liquidity_months": 6,
+        },
+        "funding_requested_percentage": 90.0,
+        "purpose": "Working capital for inventory",
+    }
+
+    # Evaluate
+    return await evaluate_trade_receivables(example_mandate, example_deal)
 
 
 if __name__ == "__main__":
