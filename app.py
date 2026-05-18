@@ -33,6 +33,7 @@ from trade_receivables_agents import (
     CreditRiskAgent,
     get_all_questions,
 )
+from deal_memo import DealMemoGenerator, DealMemoInput
 
 
 # Setup logging
@@ -57,60 +58,23 @@ tr_legal_agent = TRLegalAgent()
 tr_credit_agent = CreditRiskAgent()
 
 
-def make_tr_final_decision(process_result: dict, legal_result: dict, credit_result: dict) -> dict:
+def generate_deal_memo(deal_obj, mandate_obj, process_findings, legal_findings, credit_findings) -> dict:
     """
-    Aggregate trade receivables agent results into final decision.
+    Generate an investor deal memo from agent findings.
 
-    Decision logic for receivables (stricter than investment deals):
-    - If any agent REJECTs → DECLINE (receivables are short-term, high default risk)
-    - If all APPROVE → FUND_IT
-    - If any CONDITIONAL → CONDITIONAL_APPROVE (with pricing adjustment)
+    The AI surfaces what is known, what is missing, and what is flagged.
+    Pricing scenarios are presented as options.
+    The investor makes all funding decisions.
     """
-    process_decision = process_result.get("decision", "UNKNOWN")
-    legal_decision = legal_result.get("decision", "UNKNOWN")
-    credit_decision = credit_result.get("decision", "UNKNOWN")
-
-    # Hard blockers: any REJECT means decline
-    if process_decision == "REJECT" or legal_decision == "REJECT" or credit_decision == "REJECT":
-        return {
-            "status": "DECLINE",
-            "reason": "Hard blocker detected",
-            "blocking_agent": [
-                "process" if process_decision == "REJECT" else None,
-                "legal" if legal_decision == "REJECT" else None,
-                "credit" if credit_decision == "REJECT" else None,
-            ],
-            "next_steps": ["Review blocking agent feedback", "Request additional documentation or terms adjustment"],
-        }
-
-    # Conditional approvals (lower advance, higher discount)
-    if process_decision == "CONDITIONAL" or legal_decision == "CONDITIONAL" or credit_decision == "CONDITIONAL":
-        conditions = []
-        if process_result.get("conditions"):
-            conditions.extend(process_result["conditions"])
-        if legal_result.get("conditions"):
-            conditions.extend(legal_result["conditions"])
-        if credit_result.get("conditions"):
-            conditions.extend(credit_result["conditions"])
-
-        return {
-            "status": "CONDITIONAL_APPROVE",
-            "reason": "Conditional approval with pricing/terms adjustment",
-            "conditions": conditions,
-            "recommended_pricing_adjustments": [
-                "Reduce advance from 90% to 85%" if credit_decision == "CONDITIONAL" else None,
-                "Increase discount from 5.0% to 5.5%" if credit_decision == "CONDITIONAL" else None,
-            ],
-            "next_steps": ["Apply pricing adjustments", "Execute Master Receivables Purchase Agreement", "Fund deal"],
-        }
-
-    # All clear
-    return {
-        "status": "FUND_IT",
-        "reason": "All agents approved",
-        "recommended_pricing": {"advance_pct": 90, "discount_rate_pa": 0.05},
-        "next_steps": ["Execute Master Receivables Purchase Agreement", "Fund at standard terms"],
-    }
+    memo_input = DealMemoInput(
+        deal=deal_obj,
+        mandate=mandate_obj,
+        process_findings=process_findings,
+        legal_findings=legal_findings,
+        credit_findings=credit_findings,
+    )
+    generator = DealMemoGenerator()
+    return generator.generate(memo_input)
 
 
 def make_final_decision(process_result: dict, legal_result: dict, compliance_result: dict) -> dict:
@@ -238,57 +202,41 @@ async def evaluate_deal(request: EvaluationRequest) -> JSONResponse:
 @app.post("/evaluate_trade_receivables")
 async def evaluate_trade_receivables(mandate: dict, deal: dict) -> JSONResponse:
     """
-    Evaluate a trade receivable deal against a receivables financing mandate.
+    Evaluate a trade receivable deal and return an investor deal memo.
 
     Input: mandate (financing criteria) + deal (invoice details)
     Process:
-      1. Process Agent: Is invoice valid? Delivery proof? Buyer confirmation?
-      2. Legal Agent: Is contract enforceable? Authority to assign? Perfection complete?
-      3. Credit Risk Agent: Is buyer creditworthy? Seller strong? Portfolio concentration OK?
-    Output: Final decision (FUND_IT / CONDITIONAL_APPROVE / DECLINE)
+      1. Process Agent: Invoice validity, delivery proof, buyer confirmation
+      2. Legal Agent: Enforceability, authority to assign, security perfection, KYC/AML
+      3. Credit Risk Agent: Buyer creditworthiness, seller health, portfolio concentration
+    Output: Deal memo for investor review — confirmed facts, open items, risk flags, pricing scenarios.
 
-    This endpoint uses 24 forcing questions (8 per agent) based on real trade receivables experience.
+    The AI surfaces findings. The investor makes all funding decisions.
     """
     logger.info(f"Evaluating trade receivable {deal.get('invoice_number')} from {deal.get('company_name')}")
 
     try:
-        # Parse inputs (for now, accept dicts; in production, use Pydantic validation)
-        # mandate_obj = TradeReceivablesMandate(**mandate)
-        # deal_obj = Deal(**deal)
+        # Parse into Pydantic objects for structured evaluation
+        mandate_obj = TradeReceivablesMandate(**mandate)
+        deal_obj = Deal(**deal)
 
         logger.info("Running Process Agent (invoice quality)...")
-        process_result = tr_process_agent.evaluate(deal)
+        process_findings = tr_process_agent.evaluate(deal_obj)
 
         logger.info("Running Legal Agent (enforceability & compliance)...")
-        legal_result = tr_legal_agent.evaluate(deal)
+        legal_findings = tr_legal_agent.evaluate(deal_obj)
 
         logger.info("Running Credit Risk Agent (buyer & seller quality)...")
-        credit_result = tr_credit_agent.evaluate(deal)
+        credit_findings = tr_credit_agent.evaluate(deal_obj)
 
-        # Aggregate results
-        logger.info("Aggregating results...")
-        final_decision = make_tr_final_decision(process_result, legal_result, credit_result)
+        # Generate investor memo (not a decision)
+        logger.info("Generating deal memo for investor review...")
+        memo = generate_deal_memo(deal_obj, mandate_obj, process_findings, legal_findings, credit_findings)
 
-        # Build response
-        response = {
-            "invoice_number": deal.get("invoice_number"),
-            "seller": deal.get("company_name"),
-            "buyer": deal.get("buyer_name"),
-            "invoice_amount_usd": deal.get("invoice_amount_usd"),
-            "final_decision": final_decision["status"],
-            "final_reasoning": final_decision.get("reason", ""),
-            "agents": {
-                "process": process_result,
-                "legal": legal_result,
-                "credit_risk": credit_result,
-            },
-            "conditions": final_decision.get("conditions", []),
-            "pricing_recommendations": final_decision.get("recommended_pricing_adjustments") or final_decision.get("recommended_pricing"),
-            "next_steps": final_decision.get("next_steps", []),
-        }
-
-        logger.info(f"Evaluation complete: {final_decision['status']}")
-        return JSONResponse(response)
+        logger.info(f"Memo generated: {memo['findings_summary']['confirmed_count']} confirmed, "
+                    f"{memo['findings_summary']['missing_count']} missing, "
+                    f"{memo['findings_summary']['flagged_count']} flagged")
+        return JSONResponse(memo)
 
     except Exception as e:
         logger.error(f"Trade receivables evaluation failed: {str(e)}")
@@ -407,6 +355,7 @@ async def test_trade_receivables() -> JSONResponse:
     """
     Quick test endpoint for trade receivables with anonymized example deal.
     Based on real LinkLogis/ChemTank experience (anonymized).
+    Returns a deal memo for investor review — not a funding decision.
     """
 
     # Example mandate (DTF Trade Receivables Program)
